@@ -1,0 +1,5 @@
+# Scripts et fichiers env exécutés sous Linux : fins de ligne LF obligatoires
+*.sh   text eol=lf
+*.env  text eol=lf
+*.example text eol=lf
+Dockerfile text eol=lf
