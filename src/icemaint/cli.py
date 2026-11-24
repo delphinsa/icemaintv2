@@ -507,12 +507,14 @@ def td_load(
 ) -> None:
     """Copie une table Teradata vers une table Iceberg (INSERT INTO ... SELECT, colonnes par nom).
 
-    La simulation contrôle la connexion, les colonnes et le nombre de lignes, sans rien écrire.
+    La simulation contrôle la connexion, l'existence de la cible et le nombre de lignes, sans rien écrire.
     La table cible doit exister (CREATE TABLE côté Teradata, voir le README).
     """
     try:
         source = td.check_ident(source, "source")
         target = td.check_ident(target, "cible")
+        if source.count(".") != 1:
+            raise ValueError(f"source « {source} » : format attendu base.table")
     except ValueError as exc:
         raise typer.BadParameter(str(exc))
     where_sql = f" WHERE {where}" if where else ""
@@ -522,27 +524,32 @@ def td_load(
     label = f"{source} -> {target}"
     try:
         cur = conn.cursor()
+        # Pas de « SELECT * » : sur une table très large, la description du résultat dépasse la limite
+        # de 1 Mo par ligne de réponse (erreur 9991). Les colonnes viennent du dictionnaire DBC.
         try:
-            cur.execute(f"SELECT * FROM {source} WHERE 1=0")
-            src_cols = [d[0] for d in cur.description]
-            cur.execute(f"SELECT * FROM {target} WHERE 1=0")
-            tgt_cols = {d[0].upper() for d in cur.description}
+            t0 = time.monotonic()
+            cur.execute("SELECT ColumnName FROM DBC.ColumnsV WHERE DatabaseName = ? AND TableName = ? ORDER BY ColumnId",
+                        [source.split(".")[0], source.split(".")[1]])
+            src_cols = [row[0].strip() for row in cur.fetchmany(5000)]
+            if not src_cols:
+                raise RuntimeError(f"source {source} introuvable dans DBC.ColumnsV (nom ou droits)")
+            log(f"  source : {len(src_cols)} colonnes lues dans DBC ({round(time.monotonic() - t0, 1)} s)")
+            t0 = time.monotonic()
+            cur.execute(f"SELECT {src_cols[0]} FROM {target} WHERE 1=0")   # la cible existe-t-elle ?
+            log(f"  cible : accessible ({round(time.monotonic() - t0, 1)} s)")
+            t0 = time.monotonic()
             cur.execute(f"SELECT COUNT(*) FROM {source}{where_sql}")
             expected = cur.fetchone()[0]
+            log(f"  source : {expected} ligne(s) à copier ({round(time.monotonic() - t0, 1)} s)")
         except Exception as exc:
             typer.echo(f"ERREUR contrôles préalables : {short_error(exc)}", err=True)
             emit("td-load", label, "KO", {"erreur": short_error(exc)}, started)
             raise typer.Exit(1)
 
-        missing = [c for c in src_cols if c.upper() not in tgt_cols]
-        if missing:
-            typer.echo(f"ERREUR : colonnes absentes de la cible : {', '.join(missing)}", err=True)
-            emit("td-load", label, "KO", {"colonnes_absentes": missing}, started)
-            raise typer.Exit(1)
-
         columns = ",\n  ".join(src_cols)
         stmt = f"INSERT INTO {target} (\n  {columns}\n)\nSELECT\n  {columns}\nFROM {source}{where_sql}"
-        log(f"td-load {label} : {len(src_cols)} colonnes, {expected} ligne(s) à copier")
+        log(f"td-load {label} : {len(src_cols)} colonnes, {expected} ligne(s) à copier "
+            "(colonnes de la cible non comparées une à une : l'INSERT échoue si l'une manque)")
         if dry_run:
             log("  SIMULATION : rien n'est écrit (utiliser --apply)")
             emit("td-load", label, "OK", {"simulation": True, "colonnes": len(src_cols), "lignes_source": expected}, started)

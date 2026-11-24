@@ -82,7 +82,7 @@ Chaque option de chaque commande a une variable d'environnement, affichée par
 ```bash
 cd /opt/dataplatform/maintenance-iceberg
 chmod +x bin/*.sh scripts/*.sh          # le kit est passé par Windows
-./scripts/build-image.sh                # environ 2 minutes ; attendu : « Image construite : icemaint:0.2.0 »
+./scripts/build-image.sh                # environ 2 minutes ; attendu : « Image construite : icemaint:0.2.1 »
 docker builder prune -af                # libère le cache de build (l'image est conservée)
 ```
 
@@ -209,9 +209,11 @@ bin/td-load.sh conf/jobs/exemple-td-load.env                    # simulation : c
 ICEMAINT_DRY_RUN=false bin/td-load.sh conf/jobs/exemple-td-load.env   # copie réelle
 ```
 
-La simulation vérifie la connexion, que la table cible existe, que toutes les
-colonnes de la source s'y trouvent (les colonnes sont appariées par nom, pas par
-position) et compte les lignes à copier. La copie réelle compare ce compte au
+La simulation vérifie la connexion, lit les colonnes de la source dans `DBC.ColumnsV`
+(jamais `SELECT *` : sur une table très large, Teradata refuse un résultat de plus
+de 1 Mo par ligne, erreur 9991), vérifie que la cible existe et compte les lignes à
+copier. Les colonnes sont appariées par nom, pas par position ; si l'une manque dans
+la cible, c'est l'`INSERT` qui échoue. La copie réelle compare ce compte au
 nombre de lignes annoncé par Teradata : en cas d'écart, statut `ECART` et code 1.
 
 **Script SQL libre** (`td-sql`) : déposer le fichier dans `conf/sql/`, le nommer
